@@ -1,6 +1,6 @@
 # HYU-AUE8088, Understanding and Utilizing Deep Learning
 
-## PA #2. Object Detection
+## Project. Multispectral Pedestrian Detection
 
 ### Important Files
 
@@ -8,38 +8,45 @@
 ├── README.md
 ├── requirements.txt
 ├── datasets
-│   └── nuscenes/ (see below explanation)
+│   └── kaist-rgbt/ (see below explanation)
 ├── data
 │   ├── ...
-│   └── nuscenes.yaml
+│   └── kaist-rgbt.yaml
 ├── models
 │   ├── ...
+│   ├── common.py
 │   ├── yolo.py
-│   └── yolo5n_nuscenes.yaml
+│   ├── yolo5n_kaist-rgbt.yaml
+│   └── yolo5s_kaist-rgbt.yaml
 ├── utils
 │   ├── ...
+│   ├── eval
+│   │   ├── coco.py
+│   │   ├── cocoeval.py
+│   │   └── kaisteval.py
 │   ├── dataloaders.py
 │   └── loss.py
 ├── detect.py
-├── debug.ipynb
+├── debug_kaist.ipynb
+├── val.py
 └── train_simple.py
 ```
 
 ### Preparation
-- Prepare dataset (4.3GB, resized images with bbox labels, front camera only)
+- Prepare dataset (5.8GB, multispectral(visible + lwir) images with bbox labels)
   ```bash
-  $ wget https://hyu-aue8088.s3.ap-northeast-2.amazonaws.com/nuscenes_det2d.tar.gz
-  $ tar xzvf nuscenes_det2d.tar.gz
+  $ wget https://hyu-aue8088.s3.ap-northeast-2.amazonaws.com/kaist-rgbt-aue8088.tar.gz
+  $ tar xzvf kaist-rgbt-aue8088.tar.gz
   ```
 
 - Create python virtual environment
   ```bash
-  $ python3 -m venv venv/aue8088-pa2
-  $ source venv/aue8088-pa2/bin/activate
+  $ python3 -m venv venv/aue8088-project
+  $ source venv/aue8088-project/bin/activate
   ```
 
 - Check whether the virtual environment set properly
-: The result should end with `venv/aue8088-pa2/bin/python`.
+: The result should end with `venv/aue8088-project/bin/python`.
 
   ```bash
   $ which python
@@ -47,14 +54,20 @@
 
 - Clone base code repository (replace `ircvlab` to `your account` if you forked the repository)
   ```bash
-  $ git clone https://github.com/ircvlab/aue8088-pa2
+  $ git clone -b project https://github.com/ircvlab/aue8088-pa2
   ```
 
-- [!] Create a symbolic link for nuscenes dataset
+  If you already forked the above repository, then you can checkout to `project` branch.
+  ```bash
+  $ git fetch origin
+  $ git checkout -b project origin/project
+  ```
+
+- [!] Create a symbolic link for kaist-rgbt dataset
     - Assume the below folder structure
 
       ```bash
-      ├── nuscenes_det2d
+      ├── kaist-rgbt
       ├── aue8088-pa2
       │   ├── data/
       │   ├── models/
@@ -67,7 +80,7 @@
       ```bash
       $ cd aue8088-pa2
       $ mkdir datasets
-      $ ln -s $(realpath ../nuscenes_det2d) datasets/nuscenes
+      $ ln -s $(realpath ../kaist-rgbt) datasets/kaist-rgbt
       $
       ```
 
@@ -80,12 +93,27 @@
 - Command
   ```bash
   $ python train_simple.py \
-    --img 416 \
-    --batch-size 64 \
-    --epochs 40 \
-    --data data/nuscenes.yaml \
-    --cfg models/yolov5n_nuscenes.yaml \
+    --img 640 \
+    --batch-size 16 \
+    --epochs 20 \
+    --data data/kaist-rgbt.yaml \
+    --cfg models/yolov5n_kaist-rgbt.yaml \
     --weights yolov5n.pt \
     --workers 16 \
-    --name yolov5n
+    --name yolov5n-rgbt \
+    --rgbt \
+    --single-cls
   ```
+
+### Evaluation (eval.ai server)
+- On your labtop, go to the website: `http://166.104.168.170:8888/`
+    - Only available in Hanyang internal network
+    - If you're not in campus, please use VPN (https://vpn.hanyang.ac.kr)
+        - It takes a day (or two) to get the permission from IT department.
+- Sign up
+- Send a message to me via LMS (then, I'll manually verify your account.)
+- Go to `All Challenges` - `Multispectral Pedestrian Detection Challenge` - `Submit`
+- Upload your predictions on `test-all-20.txt`
+    - If you run `train_simple.py` with the default setting, predictions on `test-all-20.txt` will be generated: `runs/train/*/epoch*_predictions.json`
+    - You can download this file onto your computer.
+    - Note: if size of the prediction file is too large (about > 30MB), evaluation on the server could be failed.
