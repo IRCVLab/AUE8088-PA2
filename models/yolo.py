@@ -48,6 +48,10 @@ from models.common import (
     GhostBottleneck,
     GhostConv,
     Proto,
+    MultiStreamConv,
+    MultiStreamC3,
+    MultiStreamMaxPool2d,
+    Fusion,
 )
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
@@ -242,14 +246,26 @@ class DetectionModel(BaseModel):
         # Build strides, anchors
         m = self.model[-1]  # Detect()
         if isinstance(m, (Detect, Segment)):
-            s = 256  # 2x min stride
-            m.inplace = self.inplace
-            forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
-            m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
-            check_anchor_order(m)
-            m.anchors /= m.stride.view(-1, 1, 1)
-            self.stride = m.stride
-            self._initialize_biases()  # only run once
+            try:
+                s = 256  # 2x min stride
+                m.inplace = self.inplace
+                forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
+                m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
+                check_anchor_order(m)
+                m.anchors /= m.stride.view(-1, 1, 1)
+                self.stride = m.stride
+                self._initialize_biases()  # only run once
+            except:
+                # For RGB+T input
+                s = 640  # 2x min stride
+                m.inplace = self.inplace
+                forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
+                m.stride = torch.tensor([s / x.shape[-2] for x in forward([torch.zeros(1, ch, s, s), torch.zeros(1, ch, s, s)])])  # forward
+                check_anchor_order(m)
+                m.anchors /= m.stride.view(-1, 1, 1)
+                self.stride = m.stride
+                self._initialize_biases()  # only run once
+
 
         # Init weights, biases
         initialize_weights(self)
@@ -411,13 +427,15 @@ def parse_model(d, ch):
             nn.ConvTranspose2d,
             DWConvTranspose2d,
             C3x,
+            MultiStreamConv,
+            MultiStreamC3,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, ch_mul)
 
             args = [c1, c2, *args[1:]]
-            if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x}:
+            if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x, MultiStreamC3}:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:
@@ -435,6 +453,8 @@ def parse_model(d, ch):
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
+        elif m is Fusion:
+            c2 = ch[f] * args[1]
         else:
             c2 = ch[f]
 

@@ -90,6 +90,28 @@ class Conv(nn.Module):
         return self.act(self.conv(x))
 
 
+class MultiStreamConv(nn.Module):
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True, num_streams=2):
+        """Initializes multiple standard convolution layers with optional batch normalization and activation."""
+        super().__init__()
+        self.conv_layers = nn.ModuleList([Conv(c1, c2, k, s, p, g, d, act) for _ in range(num_streams)])
+
+    def forward(self, x):
+        assert len(x) == len(self.conv_layers), 'The number of input data stream does not match the predefined settings.'
+        return [_layer(_x) for _x, _layer in zip(x, self.conv_layers)]
+
+
+class MultiStreamMaxPool2d(nn.Module):
+    def __init__(self, k=1, s=1, p=0, d=1, return_indices=False, ceil_mode=True, num_streams=2):
+        """Initializes a multistream maxpool layer."""
+        super().__init__()
+        self.pool_layers = nn.ModuleList([nn.MaxPool2d(k, s, p, d, return_indices, ceil_mode) for _ in range(num_streams)])
+
+    def forward(self, x):
+        assert len(x) == len(self.pool_layers), 'The number of input data stream does not match the predefined settings.'
+        return [_layer(_x) for _x, _layer in zip(x, self.pool_layers)]
+
+
 class DWConv(Conv):
     # Depth-wise convolution
     def __init__(self, c1, c2, k=1, s=1, d=1, act=True):
@@ -236,6 +258,21 @@ class C3(nn.Module):
     def forward(self, x):
         """Performs forward propagation using concatenated outputs from two convolutions and a Bottleneck sequence."""
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+
+
+class MultiStreamC3(nn.Module):
+    # CSP Bottleneck with 3 convolutions for RGB+T inputs
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_streams=2):
+        """Initializes C3 module with options for channel count, bottleneck repetition, shortcut usage, group
+        convolutions, and expansion.
+        """
+        super().__init__()
+        self.c3_layers = nn.ModuleList([C3(c1, c2, n, shortcut, g, e) for _ in range(num_streams)])
+
+    def forward(self, x):
+        """Performs forward propagation using concatenated outputs from two convolutions and a Bottleneck sequence."""
+        assert len(x) == len(self.c3_layers), 'The number of input data stream does not match the predefined settings.'
+        return [_layer(_x) for _x, _layer in zip(x, self.c3_layers)]
 
 
 class C3x(C3):
@@ -433,6 +470,25 @@ class Concat(nn.Module):
         int.
         """
         return torch.cat(x, self.d)
+
+
+class Fusion(nn.Module):
+    # Concatenate a list of tensors along dimension
+    def __init__(self, op='concat', output_ch_mul=2):
+        """Initializes a Concat module to concatenate tensors along a specified dimension."""
+        super().__init__()
+        self.output_ch_mul = output_ch_mul
+        assert op in ('concat', 'sum')
+        self.op = op
+
+    def forward(self, x):
+        """Concatenates a list of tensors along a specified dimension; `x` is a list of tensors, `dimension` is an
+        int.
+        """
+        if self.op == 'concat':
+            return torch.cat(x, dim=1)
+        elif self.op == 'sum':
+            return torch.sum(x)
 
 
 class DetectMultiBackend(nn.Module):
