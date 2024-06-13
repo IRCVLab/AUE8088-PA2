@@ -145,8 +145,8 @@ class ComputeLoss:
 
             n = b.shape[0]  # number of targets
             if n:
-                # pxy, pwh, _, pcls = pi[b, a, gj, gi].tensor_split((2, 4, 5), dim=1)  # faster, requires torch 1.8.0
-                pxy, pwh, _, pcls = pi[b, a, gj, gi].split((2, 2, 1, self.nc), 1)  # target-subset of predictions
+                pxy, pwh, _, pcls = pi[b, a, gj, gi].tensor_split((2, 4, 5), dim=1)  # faster, requires torch 1.8.0
+                # pxy, pwh, _, pcls = pi[b, a, gj, gi].split((2, 2, 1, self.nc), 1)  # target-subset of predictions
 
                 # Regression
                 pxy = pxy.sigmoid() * 2 - 0.5
@@ -162,6 +162,13 @@ class ComputeLoss:
                     b, a, gj, gi, iou = b[j], a[j], gj[j], gi[j], iou[j]
                 if self.gr < 1:
                     iou = (1.0 - self.gr) + self.gr * iou
+
+                # If prediction is matched (iou > 0.5) with bounding box marked as ignore,
+                # do not calculate objectness loss
+                ign_idx = (tcls[i] == -1) & (iou > self.hyp["iou_t"])
+                keep = ~ign_idx
+                b, a, gj, gi, iou = b[keep], a[keep], gj[keep], gi[keep], iou[keep]
+
                 tobj[b, a, gj, gi] = iou  # iou ratio
 
                 # Classification
