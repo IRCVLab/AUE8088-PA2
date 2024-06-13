@@ -1,0 +1,71 @@
+# YOLOv5 🚀 by Ultralytics, AGPL-3.0 license
+# KAIST Multispectral Pedestrian Detection Benchmark
+# https://soonminhwang.github.io/rgbt-ped-detection/
+# Example usage: python train.py --data kaist-rgbt.yaml
+# parent
+# └── yolov5
+#     ├── datasets ── kaist-rgbt ← downloads here or creates a symbolic link (5.8 GB)
+#     └── data ── kaist-rgbt.yaml
+
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+path: datasets/kaist-rgbt
+train: # train files info (relative to 'path') 12,538 images
+  - train-all-04.txt      # TODO: Please separate this file into train/val
+val: # val files info (relative to 'path')  12,538 images
+  - test-all-20.txt
+test: # test files info (optional)
+  - test-all-20.txt
+
+# Classes
+names:
+  0: person
+  1: cyclist
+  2: people
+  3: person?
+
+# Download script/URL (optional) ---------------------------------------------------------------------------------------
+download: |
+  import os
+  import xml.etree.ElementTree as ET
+  from tqdm import tqdm
+  from utils.general import download, Path
+  from utils.general import Path
+
+  def convert_label(names, lb_path, lb_path_new):
+      def convert_box(size, box):
+          dw, dh = 1. / size[0], 1. / size[1]
+          x, y, w, h = box
+          return x * dw, y * dh, w * dw, h * dh
+
+      with open(lb_path) as in_file:
+          tree = ET.parse(in_file)
+
+      with open(lb_path_new, 'w') as out_file:
+          root = tree.getroot()
+          size = root.find('size')
+          w = int(size.find('width').text)
+          h = int(size.find('height').text)
+
+          for obj in root.iter('object'):
+              cls = obj.find('name').text
+              xmlbox = obj.find('bndbox')
+              bb = convert_box((w, h), [float(xmlbox.find(x).text) for x in ('x', 'y', 'w', 'h')])
+              occ = int(obj.find('occlusion').text)
+              cls_id = names.index(cls)  # class id
+              out_file.write(" ".join([str(a) for a in (cls_id, *bb, occ)]) + '\n')
+
+  path = Path('/home/ubuntu/datasets/kaist-cvpr15-aue8088')  # dataset root dir
+  with open(str(path / 'train-all-04.txt'), 'r') as fp:
+  # with open(str(path / 'test-all-20.txt'), 'r') as fp:
+      labels = [f.replace('{}/', '').replace('images', 'labels').replace('.jpg', '.xml').rstrip('\n') for f in fp.readlines()]
+
+  with open(path / 'kaist-rgbt.names') as fp:
+      names = [f.rstrip('\n') for f in fp.readlines()]
+
+  for label in tqdm(labels, total=len(labels)):
+      lb_file = str(path / label)
+      lb_file_new = lb_file.replace('labels', 'labels_converted').replace('.xml', '.txt')
+
+      os.makedirs(os.path.dirname(lb_file_new), exist_ok=True)
+
+      convert_label(names, lb_file, lb_file_new)  # convert labels to YOLO format
