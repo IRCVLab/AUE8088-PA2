@@ -71,6 +71,7 @@ from utils.torch_utils import (
     select_device,
     smart_optimizer,
 )
+import wandb
 
 GIT_INFO = check_git_info()
 
@@ -481,5 +482,6 @@ def main(opt, callbacks=Callbacks()):
 
 
 if __name__ == "__main__":
+    wandb.login(key="87c974a015598c3d0c2eb780c5d1be4608a3814d", relogin=True)
     opt = parse_opt()
     main(opt)
