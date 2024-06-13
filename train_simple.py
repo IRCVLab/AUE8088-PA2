@@ -32,6 +32,8 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
+from utils.autoanchor import check_anchors
+
 import val as validate  # for end-of-epoch mAP
 from models.experimental import attempt_load
 from models.yolo import Model
@@ -133,7 +135,8 @@ def train(hyp, opt, device, callbacks):
     data_dict = data_dict or check_dataset(data)  # check if None
     train_path, val_path = data_dict["train"], data_dict["val"]
     nc = 1 if single_cls else int(data_dict["nc"])  # number of classes
-    names = {0: "item"} if single_cls and len(data_dict["names"]) != 1 else data_dict["names"]  # class names
+    names = {0: data_dict["names"][0]} if single_cls and len(data_dict["names"]) != 1 else data_dict["names"]  # class names
+
     is_coco = isinstance(val_path, str) and val_path.endswith("coco/val2017.txt")  # COCO dataset
 
     # Model
@@ -183,7 +186,7 @@ def train(hyp, opt, device, callbacks):
         gs,
         single_cls,
         hyp=hyp,
-        augment=True,
+        augment=False,      # TODO: make it work
         cache=None if opt.cache == "val" else opt.cache,
         rect=opt.rect,
         rank=-1,
@@ -193,6 +196,7 @@ def train(hyp, opt, device, callbacks):
         prefix=colorstr("train: "),
         shuffle=True,
         seed=opt.seed,
+        rgbt_input=opt.rgbt,
     )
     labels = np.concatenate(dataset.labels, 0)
     mlc = int(labels[:, 0].max())  # max label class
@@ -207,11 +211,12 @@ def train(hyp, opt, device, callbacks):
         single_cls,
         hyp=hyp,
         cache=None if noval else opt.cache,
-        rect=True,
+        rect=False,     # Should be set to False for validation, otherwise it will break evaluation pipeline
         rank=-1,
         workers=workers,
         pad=0.5,
         prefix=colorstr("val: "),
+        rgbt_input=opt.rgbt,
     )[0]
 
     # pre-reduce anchor precision
@@ -227,7 +232,8 @@ def train(hyp, opt, device, callbacks):
     hyp["label_smoothing"] = opt.label_smoothing
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
-    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
+    if nc > 1:
+        model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
     model.names = names
 
     # Start training
@@ -259,10 +265,15 @@ def train(hyp, opt, device, callbacks):
 
         pbar = tqdm(pbar, total=nb, bar_format=TQDM_BAR_FORMAT)  # progress bar
         optimizer.zero_grad()
-        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+
+        for i, (imgs, targets, paths, _, _) in pbar:  # batch -------------------------------------------------------------
             callbacks.run("on_train_batch_start")
             ni = i + nb * epoch  # number integrated batches (since train start)
-            imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
+
+            if isinstance(imgs, list):
+                imgs = [img.to(device, non_blocking=True).float() / 255 for img in imgs]    # For RGB-T input
+            else:
+                imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
 
             # Warmup
             if ni <= nw:
@@ -273,14 +284,6 @@ def train(hyp, opt, device, callbacks):
                     x["lr"] = np.interp(ni, xi, [hyp["warmup_bias_lr"] if j == 0 else 0.0, x["initial_lr"] * lf(epoch)])
                     if "momentum" in x:
                         x["momentum"] = np.interp(ni, xi, [hyp["warmup_momentum"], hyp["momentum"]])
-
-            # Multi-scale
-            if opt.multi_scale:
-                sz = random.randrange(int(imgsz * 0.5), int(imgsz * 1.5) + gs) // gs * gs  # size
-                sf = sz / max(imgs.shape[2:])  # scale factor
-                if sf != 1:
-                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
-                    imgs = nn.functional.interpolate(imgs, size=ns, mode="bilinear", align_corners=False)
 
             # Forward
             with torch.cuda.amp.autocast(amp):
@@ -308,7 +311,7 @@ def train(hyp, opt, device, callbacks):
             mem = f"{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G"  # (GB)
             pbar.set_description(
                 ("%11s" * 2 + "%11.4g" * 5)
-                % (f"{epoch}/{epochs - 1}", mem, *mloss, targets.shape[0], imgs.shape[-1])
+                % (f"{epoch}/{epochs - 1}", mem, *mloss, targets.shape[0], (imgs[0] if isinstance(imgs, list) else imgs).shape[-1])
             )
             callbacks.run("on_train_batch_end", model, ni, imgs, targets, paths, list(mloss))
             if callbacks.stop_training:
@@ -331,11 +334,13 @@ def train(hyp, opt, device, callbacks):
                 half=amp,
                 model=ema.ema,
                 single_cls=single_cls,
+                save_json=True,
                 dataloader=val_loader,
                 save_dir=save_dir,
-                plots=False,
+                plots=True,
                 callbacks=callbacks,
                 compute_loss=compute_loss,
+                epoch=epoch,
             )
 
         # Update best mAP
@@ -391,7 +396,7 @@ def train(hyp, opt, device, callbacks):
                     single_cls=single_cls,
                     dataloader=val_loader,
                     save_dir=save_dir,
-                    save_json=is_coco,
+                    save_json=True,
                     verbose=True,
                     plots=False,
                     callbacks=callbacks,
@@ -447,6 +452,7 @@ def parse_opt(known=False):
     parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
+    parser.add_argument("--rgbt", action="store_true", help="Feed RGB-T multispectral image pair.")
 
     # Logger arguments
     parser.add_argument("--entity", default=None, help="Entity")

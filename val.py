@@ -71,7 +71,7 @@ def save_one_txt(predn, save_conf, shape, file):
             f.write(("%g " * len(line)).rstrip() % line + "\n")
 
 
-def save_one_json(predn, jdict, path, class_map):
+def save_one_json(predn, jdict, path, index, class_map):
     """
     Saves one JSON detection result with image ID, category ID, bounding box, and score.
 
@@ -81,9 +81,12 @@ def save_one_json(predn, jdict, path, class_map):
     box = xyxy2xywh(predn[:, :4])  # xywh
     box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
     for p, b in zip(predn.tolist(), box.tolist()):
+        if p[4] < 0.1:
+            continue
         jdict.append(
             {
-                "image_id": image_id,
+                "image_name": image_id,
+                "image_id": int(index),
                 "category_id": class_map[int(p[5])],
                 "bbox": [round(x, 3) for x in b],
                 "score": round(p[4], 5),
@@ -147,6 +150,7 @@ def run(
     plots=True,
     callbacks=Callbacks(),
     compute_loss=None,
+    epoch=None,
 ):
     # Initialize/load model and set device
     training = model is not None
@@ -221,19 +225,26 @@ def run(
     jdict, stats, ap, ap_class = [], [], [], []
     callbacks.run("on_val_start")
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
-    for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+
+    for batch_i, (ims, targets, paths, shapes, indices) in enumerate(pbar):
         callbacks.run("on_val_batch_start")
         with dt[0]:
-            if cuda:
-                im = im.to(device, non_blocking=True)
-                targets = targets.to(device)
-            im = im.half() if half else im.float()  # uint8 to fp16/32
-            im /= 255  # 0 - 255 to 0.0 - 1.0
-            nb, _, height, width = im.shape  # batch size, channels, height, width
+            if isinstance(ims, list):
+                ims = [im.to(device, non_blocking=True).float() / 255 for im in ims]    # For RGB-T input
+                nb, _, height, width = ims[0].shape  # batch size, channels, height, width
+                if half:
+                    ims = [im.half() for im in ims]
+            else:
+                ims = ims.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
+                nb, _, height, width = ims.shape  # batch size, channels, height, width
+                if half:
+                    ims = ims.half()
+
+            targets = targets.to(device)
 
         # Inference
         with dt[1]:
-            preds, train_out = model(im) if compute_loss else (model(im, augment=augment), None)
+            preds, train_out = model(ims) if compute_loss else (model(ims, augment=augment), None)
 
         # Loss
         if compute_loss:
@@ -247,11 +258,15 @@ def run(
                 preds, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls, max_det=max_det
             )
 
+        if isinstance(ims, list):
+            ims = ims[0]    # thermal image
+
         # Metrics
         for si, pred in enumerate(preds):
             labels = targets[targets[:, 0] == si, 1:]
             nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
             path, shape = Path(paths[si]), shapes[si][0]
+            index = indices[si]
             correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
             seen += 1
 
@@ -266,12 +281,12 @@ def run(
             if single_cls:
                 pred[:, 5] = 0
             predn = pred.clone()
-            scale_boxes(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
+            scale_boxes(ims[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
 
             # Evaluate
             if nl:
                 tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
-                scale_boxes(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
+                scale_boxes(ims[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
                 correct = process_batch(predn, labelsn, iouv)
                 if plots:
@@ -283,26 +298,31 @@ def run(
                 (save_dir / "labels").mkdir(parents=True, exist_ok=True)
                 save_one_txt(predn, save_conf, shape, file=save_dir / "labels" / f"{path.stem}.txt")
             if save_json:
-                save_one_json(predn, jdict, path, class_map)  # append to COCO-JSON dictionary
-            callbacks.run("on_val_image_end", pred, predn, path, names, im[si])
+                save_one_json(predn, jdict, path, index, class_map)  # append to COCO-JSON dictionary
+            callbacks.run("on_val_image_end", pred, predn, path, names, ims[si])
 
         # Plot images
         if plots and batch_i < 3:
-            plot_images(im, targets, paths, save_dir / f"val_batch{batch_i}_labels.jpg", names)  # labels
-            plot_images(im, output_to_target(preds), paths, save_dir / f"val_batch{batch_i}_pred.jpg", names)  # pred
+            desc = f"val_batch{batch_i}" if epoch is None else f"val_epoch{epoch}_batch{batch_i}"
+            plot_images(ims, targets, paths, save_dir / f"{desc}_labels.jpg", names)  # labels
+            plot_images(ims, output_to_target(preds), paths, save_dir / f"{desc}_pred.jpg", names)  # pred
 
-        callbacks.run("on_val_batch_end", batch_i, im, targets, paths, shapes, preds)
+        callbacks.run("on_val_batch_end", batch_i, ims, targets, paths, shapes, preds)
 
     # Compute metrics
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
     if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
+        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=False, save_dir=save_dir, names=names)
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
-    nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
+
+    # filter out ignore labels when counting the number of gt boxes
+    lbls = stats[3].astype(int)
+    lbls = lbls[lbls >= 0]
+    nt = np.bincount(lbls, minlength=nc)  # number of targets per class
 
     # Print results
-    pf = "%22s" + "%11i" * 2 + "%11.3g" * 4  # print format
+    pf = "%22s" + "%11i" * 2 + "%11.3g" * 4 + '\t(There is a bug, but this metric still says something useful.)'  # print format
     LOGGER.info(pf % ("all", seen, nt.sum(), mp, mr, map50, map))
     if nt.sum() == 0:
         LOGGER.warning(f"WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels")
@@ -325,15 +345,32 @@ def run(
 
     # Save JSON
     if save_json and len(jdict):
-        w = Path(weights[0] if isinstance(weights, list) else weights).stem if weights is not None else ""  # weights
+        if weights:
+            w = Path(weights[0] if isinstance(weights, list) else weights).stem
+        else:
+            w = f'epoch{epoch}'
+
+        pred_json = str(save_dir / f"{w}_predictions.json")  # predictions
+        LOGGER.info(f"\nSaving {pred_json}...")
+
+        with open(pred_json, "w") as f:
+            json.dump(jdict, f, indent=2)
+
+        LOGGER.info(f"\nEvaluating mAP...")
+
+        # Run evaluation: KAIST Multispectral Pedestrian Dataset
+        try:
+            # HACK: need to generate KAIST_annotation.json for your own validation set
+            if not os.path.exists('utils/eval/KAIST_annotation.json'):
+                raise FileNotFoundError('Please generate KAIST_annotation.json for your own validation set.')
+            os.system(f"python3 utils/eval/kaisteval.py --annFile utils/eval/KAIST_annotation.json --rstFile {pred_json}")
+        except Exception as e:
+            LOGGER.info(f"kaisteval unable to run: {e}")
+
+        # Run evaluation: MSCOCO Dataset
         anno_json = str(Path("../datasets/coco/annotations/instances_val2017.json"))  # annotations
         if not os.path.exists(anno_json):
             anno_json = os.path.join(data["path"], "annotations", "instances_val2017.json")
-        pred_json = str(save_dir / f"{w}_predictions.json")  # predictions
-        LOGGER.info(f"\nEvaluating pycocotools mAP... saving {pred_json}...")
-        with open(pred_json, "w") as f:
-            json.dump(jdict, f)
-
         try:  # https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocoEvalDemo.ipynb
             check_requirements("pycocotools>=2.0.6")
             from pycocotools.coco import COCO
