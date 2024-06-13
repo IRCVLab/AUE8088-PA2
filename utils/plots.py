@@ -147,6 +147,10 @@ def output_to_target(output, max_det=300):
 @threaded
 def plot_images(images, targets, paths=None, fname="images.jpg", names=None):
     """Plots an image grid with labels from YOLOv5 predictions or targets, saving to `fname`."""
+    if isinstance(images, list):
+        # HACK: select one (lwir or visible) randomly
+        images = images[np.random.randint(2)]
+
     if isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()
     if isinstance(targets, torch.Tensor):
@@ -202,8 +206,8 @@ def plot_images(images, targets, paths=None, fname="images.jpg", names=None):
             for j, box in enumerate(boxes.T.tolist()):
                 cls = classes[j]
                 color = colors(cls)
-                cls = names[cls] if names else cls
-                if labels or conf[j] > 0.25:  # 0.25 conf thresh
+                cls = names[cls] if names and cls in names else cls
+                if labels or conf[j] > 0.5:  # 0.5 conf thresh
                     label = f"{cls}" if labels else f"{cls} {conf[j]:.1f}"
                     annotator.box_label(box, label, color=color)
     annotator.im.save(fname)  # save
