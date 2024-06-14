@@ -465,8 +465,10 @@ if __name__ == "__main__":
     device = select_device(opt.device)
 
     # Create model
-    im = torch.rand(opt.batch_size, 3, 640, 640).to(device)
     model = Model(opt.cfg).to(device)
+    model.eval()
+
+    im = torch.rand(opt.batch_size, 3, 640, 640).to(device)
 
     # Options
     if opt.line_profile:  # profile layer by layer
@@ -484,3 +486,13 @@ if __name__ == "__main__":
 
     else:  # report fused model summary
         model.fuse()
+
+    # model.to(device)
+    # torch.onnx.export(
+    #     model,
+    #     im,
+    #     "yolov5_model.onnx",
+    #     export_params=True,
+    #     opset_version=11,
+    #     do_constant_folding=True
+    # )

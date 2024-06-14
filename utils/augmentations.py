@@ -333,20 +333,29 @@ def classify_albumentations(
     jitter=0.4,
     mean=IMAGENET_MEAN,
     std=IMAGENET_STD,
-    auto_aug=False,
+    auto_aug=True,
 ):
     # YOLOv5 classification Albumentations (optional, only used if package is installed)
     prefix = colorstr("albumentations: ")
     try:
         import albumentations as A
         from albumentations.pytorch import ToTensorV2
-
+        from PIL import Image
+        from torchvision.transforms import AutoAugment, AutoAugmentPolicy, ToPILImage, ToTensor
+        
         check_version(A.__version__, "1.0.3", hard=True)  # version requirement
+
+        def autoaugment_transform(image):
+            pil_image = ToPILImage()(image)
+            pil_image = AutoAugment(policy=AutoAugmentPolicy.IMAGENET)(pil_image)
+            return np.array(pil_image)
+        
         if augment:  # Resize and crop
             T = [A.RandomResizedCrop(height=size, width=size, scale=scale, ratio=ratio)]
             if auto_aug:
                 # TODO: implement AugMix, AutoAug & RandAug in albumentation
-                LOGGER.info(f"{prefix}auto augmentations are currently not supported")
+                T += [A.Lambda(image=autoaugment_transform)]
+                # LOGGER.info(f"{prefix}auto augmentations are currently not supported")
             else:
                 if hflip > 0:
                     T += [A.HorizontalFlip(p=hflip)]
