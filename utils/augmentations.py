@@ -439,3 +439,37 @@ class ToTensor:
         im = im.half() if self.half else im.float()  # uint8 to fp16/32
         im /= 255.0  # 0-255 to 0.0-1.0
         return im
+
+def random_scale(im, scale_range=(0.9, 1.1)):
+    """
+    Randomly scales an image.
+    """
+    scale = random.uniform(*scale_range)
+    height, width = im.shape[:2]
+    new_height, new_width = int(height * scale), int(width * scale)
+    scaled_im = cv2.resize(im, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+    return scaled_im
+
+def random_noise(img, mean=0, std=0.1):
+    noise = np.random.normal(mean, std, img.shape).astype(np.uint8)
+    img = cv2.add(img, noise)
+    return img
+
+def random_brightness(img, limit=0.2):
+    alpha = 1.0 + random.uniform(-limit, limit)
+    img = cv2.convertScaleAbs(img, alpha=alpha, beta=0)
+    return img
+
+def random_contrast(img, limit=0.2):
+    alpha = 1.0 + random.uniform(-limit, limit)
+    img = cv2.convertScaleAbs(img, alpha=alpha, beta=0)
+    return img
+
+def random_saturation(img, limit=0.2):
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    img = img.astype(np.float32)
+    img[..., 1] *= 1.0 + random.uniform(-limit, limit)
+    img[..., 1] = np.clip(img[..., 1], 0, 255)
+    img = img.astype(np.uint8)
+    img = cv2.cvtColor(img, cv2.COLOR_HSV2BGR)
+    return img
