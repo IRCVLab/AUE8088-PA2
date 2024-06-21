@@ -35,6 +35,7 @@ from utils.augmentations import (
     letterbox,
     mixup,
     random_perspective,
+    cutout,
 )
 from utils.general import (
     DATASETS_DIR,
@@ -162,7 +163,7 @@ def create_dataloader(
     stride,
     single_cls=False,
     hyp=None,
-    augment=False,
+    augment=True,
     cache=False,
     pad=0.0,
     rect=False,
@@ -542,7 +543,7 @@ class LoadImagesAndLabels(Dataset):
         path,
         img_size=640,
         batch_size=16,
-        augment=False,
+        augment=True,
         hyp=None,
         rect=False,
         image_weights=False,
@@ -838,8 +839,8 @@ class LoadImagesAndLabels(Dataset):
                     labels[:, 1] = 1 - labels[:, 1]
 
             # Cutouts
-            # labels = cutout(img, labels, p=0.5)
-            # nl = len(labels)  # update after cutout
+            labels = cutout(img, labels, p=0.1)
+            nl = len(labels)  # update after cutout
 
         labels_out = torch.zeros((nl, 6))
         if nl:
