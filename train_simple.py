@@ -211,6 +211,7 @@ def train(hyp, opt, device, callbacks):
         gs,
         single_cls,
         hyp=hyp,
+        augment=False,
         cache=None if noval else opt.cache,
         rect=False,     # Should be set to False for validation, otherwise it will break evaluation pipeline
         rank=-1,
@@ -460,6 +461,7 @@ def parse_opt(known=False):
     parser.add_argument("--upload_dataset", nargs="?", const=True, default=False, help='Upload data, "val" option')
     parser.add_argument("--bbox_interval", type=int, default=-1, help="Set bounding-box image logging interval")
     parser.add_argument("--artifact_alias", type=str, default="latest", help="Version of dataset artifact to use")
+    parser.add_argument("--folds", type=int, default=5, help="number of k-folds")
 
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
@@ -480,11 +482,14 @@ def main(opt, callbacks=Callbacks()):
     assert len(opt.cfg) or len(opt.weights), "either --cfg or --weights must be specified"
     if opt.name == "cfg":
         opt.name = Path(opt.cfg).stem  # use model.yaml as name
-    opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))
 
-    # Train
-    device = select_device(opt.device, batch_size=opt.batch_size)
-    train(opt.hyp, opt, device, callbacks)
+    for fold in range(opt.folds):
+        opt.save_dir = str(increment_path(Path(opt.project) /f"{opt.name}_fold_0{fold}", exist_ok=opt.exist_ok))
+        opt.data = f"data/kaist-rgbt_fold_0{fold}.yaml"
+        
+        # Train
+        device = select_device(opt.device, batch_size=opt.batch_size)
+        train(opt.hyp, opt, device, callbacks)
 
 
 if __name__ == "__main__":
