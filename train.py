@@ -551,7 +551,7 @@ def parse_opt(known=False):
     parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
-
+    parser.add_argument("--rgbt", action="store_true", help="Feed RGB-T multispectral image pair.")  # Add this line
     # Logger arguments
     parser.add_argument("--entity", default=None, help="Entity")
     parser.add_argument("--upload_dataset", nargs="?", const=True, default=False, help='Upload data, "val" option')
