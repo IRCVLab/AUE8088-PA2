@@ -8,9 +8,16 @@ from utils.metrics import bbox_iou
 from utils.torch_utils import de_parallel
 
 
-def smooth_BCE(eps=0.1):
-    """Returns label smoothing BCE targets for reducing overfitting; pos: `1.0 - 0.5*eps`, neg: `0.5*eps`. For details see https://github.com/ultralytics/yolov3/issues/238#issuecomment-598028441"""
-    return 1.0 - 0.5 * eps, 0.5 * eps
+def smooth_BCE(eps=0.1, people_label_index=None):
+    """Returns label smoothing BCE targets for reducing overfitting; pos: `1.0 - 0.5*eps`, neg: `0.5*eps`."""
+    pos = 1.0 - 0.5 * eps
+    neg = 0.5 * eps
+    if people_label_index is not None:
+        pos = torch.ones(1, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')) * (1.0 - 0.5 * eps)
+        neg = torch.ones(1, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')) * (0.5 * eps)
+        pos[people_label_index] = 1.0 - 0.1 * eps  # 'people' 라벨의 양성 스무딩 감소
+        neg[people_label_index] = 0.1 * eps  # 'people' 라벨의 음성 스무딩 감소
+    return pos, neg
 
 
 class BCEBlurWithLogitsLoss(nn.Module):
@@ -108,13 +115,14 @@ class ComputeLoss:
         """Initializes ComputeLoss with model and autobalance option, autobalances losses if True."""
         device = next(model.parameters()).device  # get model device
         h = model.hyp  # hyperparameters
+        self.people_label_index = h.get("people_label_index", 0)  # 'people' 라벨 인덱스
 
         # Define criteria
         BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h["cls_pw"]], device=device))
         BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h["obj_pw"]], device=device))
 
         # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
-        self.cp, self.cn = smooth_BCE(eps=h.get("label_smoothing", 0.0))  # positive, negative BCE targets
+        self.cp, self.cn = smooth_BCE(eps=h.get("label_smoothing", 0.0), people_label_index=self.people_label_index)  # positive, negative BCE targets
 
         # Focal loss
         g = h["fl_gamma"]  # focal loss gamma
@@ -175,6 +183,8 @@ class ComputeLoss:
                 if self.nc > 1:  # cls loss (only if multiple classes)
                     t = torch.full_like(pcls, self.cn, device=self.device)  # targets
                     t[range(n), tcls[i]] = self.cp
+                    if self.people_label_index is not None:
+                        t[:, self.people_label_index] *= 2  # 'people' 라벨 가중치 증가
                     lcls += self.BCEcls(pcls, t)  # BCE
 
                 # Append targets to text file

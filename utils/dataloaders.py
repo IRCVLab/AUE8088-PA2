@@ -1200,36 +1200,31 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp["mosaic"]
         if mosaic:
-            raise NotImplementedError('Please make "mosaic" augmentation work!')
-
-            # TODO: Load mosaic
+            # 모자이크 증강 적용
             img, labels = self.load_mosaic(index)
             shapes = None
 
-            # TODO: MixUp augmentation
+            # 믹스업 증강 적용
             if random.random() < hyp["mixup"]:
-                img, labels = mixup(img, labels, *self.load_mosaic(random.choice(self.indices)))
-
+                img, labels = self.mixup(img, labels, *self.load_mosaic(random.choice(self.indices)))
         else:
-            # Load image
-            # hw0s: original shapes, hw1s: resized shapes
+            # 이미지 로드
             imgs, hw0s, hw1s = self.load_image(index)
 
             for ii, (img, (h0, w0), (h, w)) in enumerate(zip(imgs, hw0s, hw1s)):
-                # Letterbox
+                # 레터박스 적용
                 shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
-                img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+                img, ratio, pad = self.letterbox(img, shape, auto=False, scaleup=self.augment)
                 shapes = (h0, w0), (ratio, pad)  # for COCO mAP rescaling
 
                 labels = self.labels[index].copy()
                 if labels.size:  # normalized xywh to pixel xyxy format
                     labels[:, 1:3] += labels[:, 3:5] / 2.0      # (x_lefttop, y_lefttop) -> (x_center, y_center)
-                    labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+                    labels[:, 1:] = self.xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
                 if self.augment:
-                    raise NotImplementedError('Please make data augmentation work!')
-
-                    img, labels = random_perspective(
+                    # 랜덤 퍼스펙티브 증강 적용
+                    img, labels = self.random_perspective(
                         img,
                         labels,
                         degrees=hyp["degrees"],
@@ -1241,31 +1236,32 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
                 nl = len(labels)  # number of labels
                 if nl:
-                    labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1e-3)
+                    labels[:, 1:5] = self.xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1e-3)
 
                 if self.augment:
-                    # Albumentations
+                    # Albumentations 적용
                     img, labels = self.albumentations(img, labels)
                     nl = len(labels)  # update after albumentations
 
-                    # HSV color-space
-                    augment_hsv(img, hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
+                    # HSV 색상 변환
+                    self.augment_hsv(img, hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
 
-                    # Flip up-down
+                    # 상하 뒤집기
                     if random.random() < hyp["flipud"]:
                         img = np.flipud(img)
                         if nl:
                             labels[:, 2] = 1 - labels[:, 2]
 
-                    # Flip left-right
+                    # 좌우 뒤집기
                     if random.random() < hyp["fliplr"]:
                         img = np.fliplr(img)
                         if nl:
                             labels[:, 1] = 1 - labels[:, 1]
 
-                    # Cutouts
-                    # labels = cutout(img, labels, p=0.5)
+                    # Cutouts (필요 시 적용)
+                    # img, labels = self.cutout(img, labels, p=0.5)
                     # nl = len(labels)  # update after cutout
+
 
                 labels_out = torch.zeros((nl, 7))
                 if nl:
